@@ -30,7 +30,10 @@ Include everything sent: system prompt, attached files, tool definitions (`--con
 
 **3. Estimate the visible answer** (`--answer`, tokens): about 1.3 tokens per English word
 and about 10 per line of code. Read it from the request: "a 500-word essay" is about 650,
-and "fix this function" is about the size of the function.
+and "fix this function" is about the size of the function. For an agent, count the final
+reply plus every file or script it writes, including throwaway scripts that reproduce a bug.
+The commands and edits it sends with each tool call are covered by `--per-call` (default 400
+tokens per call; measured runs used 360-570).
 
 **4. Pick a difficulty tier** (`--tier`). It sets the reasoning tokens, the biggest unknown:
 
@@ -47,19 +50,26 @@ think far less, even at high effort settings. In a test on 2026-11-07, Opus 5.5 
 used 376 thinking tokens to write and test a small module, Sonnet 5.5 at xhigh used 1,476
 for one function, and Haiku 5.5 at medium used 201 for a short explanation. So rate everyday
 coding and writing as `simple`, and save `moderate` and above for work that is actually
-hard. If you have measured reasoning tokens for this kind of prompt, pass `--reasoning N`.
+hard. Audits, security reviews and debugging that has to reproduce a bug are `hard`: a
+repository bug and vulnerability audit on Opus 5.5 at xhigh used 40k thinking tokens. If you
+have measured reasoning tokens for this kind of prompt, pass `--reasoning N`.
 
 **5. For agent loops**, add `--turns` (model calls on Opus 5.5 at high), `--context` (fixed
 prefix: system prompt, tools, project files; in Claude Code, `/context` shows the real
-number) and `--growth` (tokens each turn adds: tool output plus model output). Claude Code
-starts every subagent with about 37k tokens. For a single call through a harness that caches
+number) and `--growth` (tool output each call adds: file contents and command output).
+Estimate growth from what the agent will read: source code is about 3-4 characters per token,
+so add up the sizes of the files it will open, plus test and command output, and divide by
+the calls. Don't add the model's own output, because the script appends each call's output,
+thinking included, since later calls re-read it. Claude Code starts every subagent with about
+37k tokens. For agent loops, low and high also vary the calls and growth by ±40% (`--spread`).
+For a single call through a harness that caches
 (Claude Code, agent SDKs), pass `--caching`: the first call writes the prompt to the cache at
 1.25× the input price, and in the test above that prefix was most of the bill. The script
 assumes prompt caching, and scales turns as well as reasoning by effort, because lower
 effort also means fewer, more consolidated tool calls. A SWE-bench-Pro-sized bug fix is
-about `--turns 30 --context 2000 --growth 1000 --reasoning 2000 --answer 2000`. That shape
+about `--turns 20 --context 2000 --growth 500 --reasoning 1000 --answer 300`. That shape
 reproduces Anthropic's published Opus 5.5 cost per task ($0.11 / $0.21 / $0.29 / $0.74 at
-low / medium / high / xhigh) within about 10%.
+low / medium / high / xhigh) within about 13%.
 
 **6. Run it** (`python3`, `python` or `uv run python`, whichever exists):
 ```bash

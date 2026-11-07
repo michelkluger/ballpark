@@ -54,32 +54,36 @@ def work(m, effort):
 REF_WORK = work(MODELS[DATA["reference"]["model"]], DATA["reference"]["effort"])[0]
 
 
-def estimate(m, effort, in_tok, answer, reasoning, turns=1, context=0, growth=0, today=None, caching=False):
+def estimate(m, effort, in_tok, answer, reasoning, turns=1, context=0, growth=0, today=None, caching=False,
+             per_call=0):
     """USD for one prompt (turns=1) or an agent loop that re-reads a growing, cached context.
 
     caching=True: the harness writes the prompt to the cache even on a single call (Claude Code does).
-
     `turns` is the loop length on the reference model at high; like reasoning, it scales with
     the token-volume index, since lower effort also means fewer, more consolidated tool calls.
-    Returns (usd, output tokens, turns actually priced).
+    `growth` is tool output added per call (file contents, command output). Each call's own output
+    (thinking, tool-call text, `per_call` tokens of commands and edits) is appended as well, because
+    later calls re-read it.
+    Returns (usd, output tokens, calls priced).
     """
     today = today or date.today()
     f = work(m, effort)[0] / REF_WORK if effort else 1.0
-    out = answer + (reasoning * f if effort else 0)
     caching = caching or turns > 1  # a loop that shrinks to one call at low effort still caches
-    turns = max(1, round(turns * f)) if turns > 1 else 1
+    calls = max(1, round(turns * f)) if turns > 1 else 1
+    out = answer + (reasoning * f if effort else 0) + (per_call * calls if calls > 1 else 0)
+    step = growth + out / calls
     usd, base = 0.0, context + in_tok
-    for i in range(turns):
-        ctx = base + i * growth
+    for i in range(calls):
+        ctx = base + i * step
         p = prices(m, today, ctx)
-        if turns == 1 and not caching:
+        if calls == 1 and not caching:
             usd += ctx * p["in"]
         elif i == 0:
             usd += ctx * p["cache_write"]
-        else:  # earlier context is a cache hit; this turn's new tokens are written
-            usd += (ctx - growth) * p["cached"] + growth * p["cache_write"]
-        usd += out / turns * p["out"]
-    return usd / 1e6, out, turns
+        else:  # earlier context is a cache hit; this call's new tokens are written
+            usd += (ctx - step) * p["cached"] + step * p["cache_write"]
+        usd += out / calls * p["out"]
+    return usd / 1e6, out, calls
 
 
 def money(x):
@@ -98,8 +102,15 @@ def main():
     ap.add_argument("--reasoning", type=int, help="override: reasoning tokens on the reference model at high")
     ap.add_argument("--model", nargs="*", help="model ids (default: all); prefix match, e.g. 'claude' or 'gpt-6'")
     ap.add_argument("--effort", nargs="*", help="effort levels, or 'all' (default: each model's default)")
-    ap.add_argument("--turns", type=int, default=1, help="model calls in an agent loop (default 1)")
-    ap.add_argument("--growth", type=int, default=2000, help="tokens added to context per turn (tool results + output)")
+    ap.add_argument("--turns", type=int, default=1, help="model calls in an agent loop on Opus 5.5 @ high (default 1)")
+    ap.add_argument("--growth", type=int, default=2000,
+                    help="tool output added to context per call (file contents, command output); "
+                         "the model's own output is added automatically")
+    ap.add_argument("--per-call", type=int, default=400,
+                    help="visible output per call in agent loops: tool commands, edits, paths (default 400)")
+    ap.add_argument("--spread", type=float, default=0.4,
+                    help="agent loops: low/high also scale turns and growth by 1-spread / 1+spread (default 0.4)")
+    ap.add_argument("--json", action="store_true", help="print rows as JSON")
     ap.add_argument("--caching", action="store_true",
                     help="harness writes the prompt to the cache even on one call (Claude Code, agent SDKs); "
                          "multi-turn runs always assume caching")
@@ -126,14 +137,20 @@ def main():
                 skipped.append(f"{k}:{e}")
                 continue
             tok = a.input_tokens if a.input_tokens is not None else round(len(text) / m["chars_per_token"])
-            run = lambda r: estimate(m, e, tok, a.answer, r, a.turns, a.context, a.growth, a.date, a.caching)
-            (c_lo, *_), (c_mid, out, n), (c_hi, *_) = run(lo), run(mid), run(hi)
+            s = a.spread if a.turns > 1 else 0.0  # loop length and tool output are as uncertain as thinking
+            run = lambda r, k: estimate(m, e, tok, a.answer, r, a.turns * k, a.context, a.growth * k, a.date,
+                                        a.caching, a.per_call)
+            (c_lo, *_), (c_mid, out, n), (c_hi, *_) = run(lo, 1 - s), run(mid, 1), run(hi, 1 + s)
             how = work(m, e)[1] if e else "no thinking"
             vol = f"x{work(m, e)[0] / REF_WORK:.2f} ref" if e else "-"
             note = "; ".join(filter(None, [how, m.get("note")]))
             rows.append((c_mid, k, e or "-", tok + a.context, round(out), n, c_lo, c_hi, vol, note))
 
     rows.sort()
+    if a.json:
+        keys = ("expected", "model", "effort", "input_tokens", "output_tokens", "calls", "low", "high", "volume", "basis")
+        print(json.dumps([dict(zip(keys, r)) for r in rows]))
+        return
     head = ("model", "effort", "in tok", "out tok", "turns", "low", "expected", "high", "volume", "basis")
     table = [head] + [(k, e, f"{t:,}", f"{o:,}", str(n), money(l), money(c), money(h), v, b)
                       for c, k, e, t, o, n, l, h, v, b in rows]
@@ -180,6 +197,12 @@ def selftest():
     # a 2-turn loop that low effort shrinks to 1 call is still priced as a cache write
     shrunk = estimate(opus, "low", 37_000, 0, 0, turns=2, today=d)
     assert shrunk[2] == 1 and abs(shrunk[0] - 37_000 * 5 / 1e6) < 1e-12
+    # agent loops: per-call tool text is output; single calls make no tool calls
+    assert estimate(opus, None, 0, 0, 0, turns=3, per_call=400, today=d)[1] == 1200
+    assert estimate(opus, None, 0, 0, 0, per_call=400, today=d)[1] == 0
+    # each call's output joins the context: 300 out over 3 calls -> writes 100+100, reads 100, out 300
+    grown = estimate(opus, None, 0, 300, 0, turns=3, today=d)[0]
+    assert abs(grown - (200 * 5 + 100 * 0.2 + 300 * 20) / 1e6) < 1e-12, grown
     # lower effort runs a shorter loop
     assert estimate(opus, "low", 0, 0, 0, turns=20, today=d)[2] < estimate(opus, "high", 0, 0, 0, turns=20, today=d)[2]
     # unmeasured model falls back to the reference volume

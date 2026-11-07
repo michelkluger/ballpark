@@ -1,7 +1,7 @@
 {
   "name": "ballpark",
   "description": "Ballpark what an LLM prompt or agent task will cost before you run it: Claude, GPT and Gemini, every effort level, from public price lists and public benchmark token data.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Michel Klueger"
   },
