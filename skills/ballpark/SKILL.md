@@ -56,11 +56,19 @@ have measured reasoning tokens for this kind of prompt, pass `--reasoning N`.
 
 **5. For agent loops**, add `--turns` (model calls on Opus 5.5 at high), `--context` (fixed
 prefix: system prompt, tools, project files; in Claude Code, `/context` shows the real
-number) and `--growth` (tool output each call adds: file contents and command output).
-Estimate growth from what the agent will read: source code is about 3-4 characters per token,
-so add up the sizes of the files it will open, plus test and command output, and divide by
-the calls. Don't add the model's own output, because the script appends each call's output,
-thinking included, since later calls re-read it. Claude Code starts every subagent with about
+number) and `--read` (the task's total tool output: file contents and command output). What
+an agent reads depends on the code, not on how many calls it takes, so give the total and the
+script spreads it over the calls (`--growth` per call still works). Source code is about 3-4
+characters per token. Agents read about twice the files you would name: the file to change,
+its tests, the docs and neighbouring modules they check, plus test and diff output. In four
+measured fixes, they read 9k-24k tokens. Don't add the model's own output, because the script
+appends each call's output, thinking included, since later calls re-read it.
+
+Open-ended tasks (explore, audit, find and fix) take more calls at higher effort, which is
+what the published effort data measures. Well-specified tasks don't: when the brief names the
+file and the change, pass `--fixed-turns` and give the call count you expect, because only
+thinking grows with effort. Four such fixes on Opus 5.5 at xhigh each took 12-14 calls.
+Claude Code starts every subagent with about
 37k tokens. When agents run back to back with the same system prompt and tools, within the
 5-minute cache lifetime, pass `--warm`. The first call then reads that prefix from the cache
 instead of writing it, which saved about $0.18 on Opus 5.5, roughly a quarter of a small fix.
