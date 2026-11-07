@@ -107,6 +107,16 @@ tokens, or re-read context in agent loops). Mention a model's quality tier when 
 it as cheaper: a cheaper model that fails the task is not cheaper. The batch APIs of all three
 providers halve the price for work that can wait. Say so when it fits.
 
+**8. Close the loop on repeated work.** A first estimate rests on priors. Once a few similar
+runs exist, measure them and estimate from the measurements:
+```bash
+python3 <this-skill-dir>/measure.py ~/.claude/projects/<project>/<session>/subagents/agent-*.jsonl
+```
+It prices each Claude Code transcript with `models.json` (cost, calls, thinking, visible output,
+tokens read, warm or cold start). With two or more runs of one model, it prints the median
+inputs to pass to `estimate.py` for the next similar task. Offer this whenever the user runs
+the same kind of task repeatedly, such as a backlog of fixes or a batch of agent jobs.
+
 ## How the numbers are built (for explaining or challenging an estimate)
 
 - **Prices**: each provider's public list price, standard tier, including long-context tiers
