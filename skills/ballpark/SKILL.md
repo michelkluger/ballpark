@@ -114,7 +114,11 @@ python3 <this-skill-dir>/measure.py ~/.claude/projects/<project>/<session>/subag
 ```
 It prices each Claude Code transcript with `models.json` (cost, calls, thinking, visible output,
 tokens read, warm or cold start). With two or more runs of one model, it prints the median
-inputs to pass to `estimate.py` for the next similar task. Offer this whenever the user runs
+inputs to pass to `estimate.py` for the next similar task. Pass only runs of the same kind of
+work. A one-file frontend change that was only typechecked took 6 calls. Estimating it from
+backend fixes that wrote tests and ran the whole suite (13-14 calls) overestimated it 2×. The
+thinking spread it prints (lowest, median, highest) keeps the range honest, because
+individual runs of one kind still varied 5× in thinking. Offer this whenever the user runs
 the same kind of task repeatedly, such as a backlog of fixes or a batch of agent jobs.
 
 ## How the numbers are built (for explaining or challenging an estimate)

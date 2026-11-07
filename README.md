@@ -70,6 +70,22 @@ closer. The skill overestimated reasoning on routine tasks, and its guidance has
 corrected. The test cases are in [`skills/ballpark/evals/`](skills/ballpark/evals) and run
 with `claude plugin eval`.
 
+**Backlog test, 2026-11-07.** Fifteen agent fixes ran one after another on a real
+Python/TypeScript repository (Opus 5.5 @ xhigh in Claude Code). Each was predicted before it
+started and measured from its transcript afterwards:
+
+| | Fixes | Bias | Median error | In range | Total predicted vs actual |
+|---|---|---|---|---|---|
+| Inputs guessed from the task | 6 | 1.19× (over) | 1.26× | 6/6 | $4.15 vs $3.47 |
+| Inputs from `measure.py` on earlier runs | 9 | 0.92× | 1.21× | 6/9 | $3.96 vs $4.52 |
+| All | 15 | 1.02× | 1.21× | 12/15 | **$8.10 vs $7.99** |
+
+The backlog total landed within 1.4% of the actual cost, and measured inputs removed the
+overestimate. A single fix still misses by about 20% on a typical run, and by up to 2×
+when it differs from the runs it was calibrated on. That happened three times: a harder
+fix that thought 4× the median, a one-file change, and a change that needed online lookups.
+Thinking per fix ranged from 0.8k to 17k tokens even within one kind of work.
+
 ## Limits
 
 - Not included: tool and search fees, image and audio input, batch and fast tiers.
