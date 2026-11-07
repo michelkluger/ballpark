@@ -55,10 +55,12 @@ REF_WORK = work(MODELS[DATA["reference"]["model"]], DATA["reference"]["effort"])
 
 
 def estimate(m, effort, in_tok, answer, reasoning, turns=1, context=0, growth=0, today=None, caching=False,
-             per_call=0):
+             per_call=0, warm=False):
     """USD for one prompt (turns=1) or an agent loop that re-reads a growing, cached context.
 
     caching=True: the harness writes the prompt to the cache even on a single call (Claude Code does).
+    warm=True: the fixed `context` prefix is already cached (a call with the same system prompt and
+    tools ran within the cache lifetime, as with back-to-back agents), so the first call reads it.
     `turns` is the loop length on the reference model at high; like reasoning, it scales with
     the token-volume index, since lower effort also means fewer, more consolidated tool calls.
     `growth` is tool output added per call (file contents, command output). Each call's own output
@@ -68,7 +70,7 @@ def estimate(m, effort, in_tok, answer, reasoning, turns=1, context=0, growth=0,
     """
     today = today or date.today()
     f = work(m, effort)[0] / REF_WORK if effort else 1.0
-    caching = caching or turns > 1  # a loop that shrinks to one call at low effort still caches
+    caching = caching or warm or turns > 1  # a loop that shrinks to one call at low effort still caches
     calls = max(1, round(turns * f)) if turns > 1 else 1
     out = answer + (reasoning * f if effort else 0) + (per_call * calls if calls > 1 else 0)
     step = growth + out / calls
@@ -79,7 +81,7 @@ def estimate(m, effort, in_tok, answer, reasoning, turns=1, context=0, growth=0,
         if calls == 1 and not caching:
             usd += ctx * p["in"]
         elif i == 0:
-            usd += ctx * p["cache_write"]
+            usd += context * p["cached"] + in_tok * p["cache_write"] if warm else ctx * p["cache_write"]
         else:  # earlier context is a cache hit; this call's new tokens are written
             usd += (ctx - step) * p["cached"] + step * p["cache_write"]
         usd += out / calls * p["out"]
@@ -110,6 +112,9 @@ def main():
                     help="visible output per call in agent loops: tool commands, edits, paths (default 400)")
     ap.add_argument("--spread", type=float, default=0.4,
                     help="agent loops: low/high also scale turns and growth by 1-spread / 1+spread (default 0.4)")
+    ap.add_argument("--warm", action="store_true",
+                    help="the --context prefix is already cached (same system prompt and tools used within the "
+                         "cache lifetime, e.g. back-to-back agents): the first call reads it instead of writing it")
     ap.add_argument("--json", action="store_true", help="print rows as JSON")
     ap.add_argument("--caching", action="store_true",
                     help="harness writes the prompt to the cache even on one call (Claude Code, agent SDKs); "
@@ -139,7 +144,7 @@ def main():
             tok = a.input_tokens if a.input_tokens is not None else round(len(text) / m["chars_per_token"])
             s = a.spread if a.turns > 1 else 0.0  # loop length and tool output are as uncertain as thinking
             run = lambda r, k: estimate(m, e, tok, a.answer, r, a.turns * k, a.context, a.growth * k, a.date,
-                                        a.caching, a.per_call)
+                                        a.caching, a.per_call, a.warm)
             (c_lo, *_), (c_mid, out, n), (c_hi, *_) = run(lo, 1 - s), run(mid, 1), run(hi, 1 + s)
             how = work(m, e)[1] if e else "no thinking"
             vol = f"x{work(m, e)[0] / REF_WORK:.2f} ref" if e else "-"
@@ -197,6 +202,9 @@ def selftest():
     # a 2-turn loop that low effort shrinks to 1 call is still priced as a cache write
     shrunk = estimate(opus, "low", 37_000, 0, 0, turns=2, today=d)
     assert shrunk[2] == 1 and abs(shrunk[0] - 37_000 * 5 / 1e6) < 1e-12
+    # warm prefix: the 37k system prompt is a cache read ($0.20/M), only the new 1k prompt is written ($5/M)
+    warm = estimate(opus, None, 1_000, 0, 0, context=37_000, today=d, warm=True)[0]
+    assert abs(warm - (37_000 * 0.2 + 1_000 * 5) / 1e6) < 1e-12
     # agent loops: per-call tool text is output; single calls make no tool calls
     assert estimate(opus, None, 0, 0, 0, turns=3, per_call=400, today=d)[1] == 1200
     assert estimate(opus, None, 0, 0, 0, per_call=400, today=d)[1] == 0

@@ -61,7 +61,10 @@ Estimate growth from what the agent will read: source code is about 3-4 characte
 so add up the sizes of the files it will open, plus test and command output, and divide by
 the calls. Don't add the model's own output, because the script appends each call's output,
 thinking included, since later calls re-read it. Claude Code starts every subagent with about
-37k tokens. For agent loops, low and high also vary the calls and growth by ±40% (`--spread`).
+37k tokens. When agents run back to back with the same system prompt and tools, within the
+5-minute cache lifetime, pass `--warm`. The first call then reads that prefix from the cache
+instead of writing it, which saved about $0.18 on Opus 5.5, roughly a quarter of a small fix.
+For agent loops, low and high also vary the calls and growth by ±40% (`--spread`).
 For a single call through a harness that caches
 (Claude Code, agent SDKs), pass `--caching`: the first call writes the prompt to the cache at
 1.25× the input price, and in the test above that prefix was most of the bill. The script
