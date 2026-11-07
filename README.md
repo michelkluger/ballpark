@@ -83,3 +83,7 @@ with `claude plugin eval`.
 Prices change monthly. To refresh, re-read the URLs in `models.json` → `sources`, update the
 rows and run `--selftest`. To add a model, copy a row. Pull requests with refreshed prices are
 welcome.
+
+## License
+
+[MIT](LICENSE)

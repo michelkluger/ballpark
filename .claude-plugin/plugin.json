@@ -6,5 +6,6 @@
     "name": "Michel Klueger"
   },
   "repository": "https://github.com/michelkluger/ballpark",
+  "license": "MIT",
   "keywords": ["cost", "pricing", "tokens", "effort", "estimate", "llm"]
 }
