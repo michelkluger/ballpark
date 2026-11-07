@@ -106,7 +106,9 @@ def main():
     ap.add_argument("--context", type=int, default=0, help="extra fixed input: system prompt, tools, attached files")
     ap.add_argument("--answer", type=int, default=500, help="expected visible output tokens (~1.3 per English word)")
     ap.add_argument("--tier", choices=list(TIERS), default="moderate", help="task difficulty -> reasoning tokens")
-    ap.add_argument("--reasoning", type=int, help="override: reasoning tokens on the reference model at high")
+    ap.add_argument("--reasoning", type=int, nargs="+", metavar="N",
+                    help="override: reasoning tokens on the reference model at high; one value, or "
+                         "low expected high (measure.py prints the spread of measured runs)")
     ap.add_argument("--model", nargs="*", help="model ids (default: all); prefix match, e.g. 'claude' or 'gpt-6'")
     ap.add_argument("--effort", nargs="*", help="effort levels, or 'all' (default: each model's default)")
     ap.add_argument("--turns", type=int, default=1, help="model calls in an agent loop on Opus 5.5 @ high (default 1)")
@@ -137,7 +139,10 @@ def main():
     text = Path(a.file).read_text(encoding="utf-8", errors="replace") if a.file else a.text
     if text is None and a.input_tokens is None:
         ap.error("give --file, --text or --input-tokens")
-    lo, mid, hi = [a.reasoning] * 3 if a.reasoning is not None else TIERS[a.tier]
+    if a.reasoning is not None and len(a.reasoning) not in (1, 3):
+        ap.error("--reasoning takes one value or three (low expected high)")
+    r = a.reasoning
+    lo, mid, hi = TIERS[a.tier] if r is None else r * 3 if len(r) == 1 else r
 
     ids = [k for k in MODELS if not a.model or any(k.startswith(p) for p in a.model)]
     if not ids:

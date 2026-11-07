@@ -74,7 +74,8 @@ def main(paths):
         return
     m = MODELS[runs[0]["model"]]
     med = lambda f: round(statistics.median(f(r) for r in same))  # noqa: E731
-    reasoning = med(lambda r: r["thinking"] * REF_WORK / work(m, r["effort"])[0] if r["effort"] else r["thinking"])
+    at_high = sorted(r["thinking"] * REF_WORK / work(m, r["effort"])[0] if r["effort"] else r["thinking"] for r in same)
+    reasoning = f"{round(at_high[0])} {round(statistics.median(at_high))} {round(at_high[-1])}"  # spread, not a point
     print(f"\n{len(same)} runs of {runs[0]['model']}: median cost ${statistics.median(r['usd'] for r in same):.3f}")
     print("inputs for similar work:  --input-tokens <prompt> "
           f"--context {med(lambda r: r['context'])} --turns {med(lambda r: r['calls'])} --fixed-turns "
