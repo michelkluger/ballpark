@@ -1,0 +1,14 @@
+{
+  "name": "ballpark",
+  "description": "Ballpark: predict LLM prompt and agent costs before you run them",
+  "owner": {
+    "name": "Michel Klueger"
+  },
+  "plugins": [
+    {
+      "name": "ballpark",
+      "source": "./",
+      "description": "Ballpark what an LLM prompt or agent task will cost, per model and effort level, from public data"
+    }
+  ]
+}

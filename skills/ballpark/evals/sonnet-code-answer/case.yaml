@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: sonnet-code-answer
+expected_outcome: |
+  A best estimate and range in USD that contains the measured cost of $0.112074 (measured from a real Claude Sonnet 5.5 subagent run on 2026-11-07), built from correct list prices, with cheaper options named.

@@ -1,0 +1,131 @@
+{
+  "as_of": "2026-11-07",
+  "sources": {
+    "anthropic_pricing": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "openai_pricing": "https://developers.openai.com/api/docs/pricing",
+    "google_pricing": "https://aistudio.google.com/docs/pricing",
+    "aa_cost_per_task": "https://artificialanalysis.ai/leaderboards/models",
+    "frontier_tier_anchor": "https://artificialanalysis.ai/models/comparisons/claude-opus-5-5-high-vs-claude-opus-5-5",
+    "openai_effort_defaults": "https://developers.openai.com/api/docs/guides/reasoning",
+    "gemini_thinking_levels": "https://aistudio.google.com/docs/thinking",
+    "anthropic_effort": "https://platform.claude.com/docs/en/build-with-claude/effort"
+  },
+  "notes": [
+    "Prices are USD per million tokens, standard (non-batch, non-fast) tier. Reasoning/thinking tokens bill as output on all three providers.",
+    "cache_write defaults to the input price when absent (OpenAI and Gemini cache implicitly with no write premium; Anthropic charges 1.25x for 5-minute writes).",
+    "aa_cost_per_task is Artificial Analysis' measured USD cost per Intelligence Index task at each effort level. Dividing it by the output price gives a token-volume index that is comparable across models whose input:output price ratio is similar (~1:5 for every model here).",
+    "chars_per_token is a fallback heuristic for English prose only: ~4 for OpenAI/Gemini; Claude's tokenizer counts 15-20% more tokens than tiktoken, and Claude 4.7+ models count up to 1.35x more again.",
+    "Gemini 3.5 Flash-Lite has an AA cost per task (0.69) but the page does not say which thinking level it ran at, so it is left out."
+  ],
+  "reference": {"model": "claude-opus-5-5", "effort": "high"},
+  "tiers": {
+    "_basis": "Reasoning tokens on the reference model at its 'high' effort: [low, expected, high]. 'frontier' expected is public (AA: Opus 5.5 high used 60.1k output tokens per index task); the other tiers are priors, scaled to stay below it.",
+    "trivial":  {"tokens": [0, 50, 300],          "examples": "greeting, factual lookup, classification, one-line rewrite"},
+    "simple":   {"tokens": [200, 800, 2500],      "examples": "short explanation, summarize given text, small code edit"},
+    "moderate": {"tokens": [1000, 4000, 10000],   "examples": "multi-step reasoning, write a function or module, analyze a document"},
+    "hard":     {"tokens": [5000, 15000, 40000],  "examples": "tricky debugging, proofs, competition math, architecture design"},
+    "frontier": {"tokens": [30000, 60000, 120000], "examples": "research-grade problems, the hardest benchmark questions"}
+  },
+  "unmeasured_effort_ratio": {
+    "_basis": "Assumption for levels no model has public data for (ratio to 'high').",
+    "minimal": 0.1
+  },
+  "models": {
+    "claude-fable-5-1": {
+      "provider": "anthropic", "chars_per_token": 2.9,
+      "price": {"in": 10, "cache_write": 12.5, "cached": 0.25, "out": 50},
+      "efforts": ["low", "medium", "high", "xhigh", "max"], "default": "high",
+      "aa_cost_per_task": {"low": 4.47, "medium": 5.56, "high": 7.54, "xhigh": 10.85, "max": 12.99}
+    },
+    "claude-opus-5-5": {
+      "provider": "anthropic", "chars_per_token": 2.9,
+      "price": {"in": 4, "cache_write": 5, "cached": 0.2, "out": 20},
+      "efforts": ["low", "medium", "high", "xhigh", "max"], "default": "medium",
+      "aa_cost_per_task": {"low": 0.98, "medium": 2.45, "high": 3.46, "xhigh": 6.05, "max": 10.04}
+    },
+    "claude-sonnet-5-5": {
+      "provider": "anthropic", "chars_per_token": 2.9,
+      "price": {"in": 2, "cache_write": 2.5, "cached": 0.1, "out": 10},
+      "efforts": ["low", "medium", "high", "xhigh", "max"], "default": "high",
+      "aa_cost_per_task": {"low": 0.51, "medium": 0.78, "high": 1.64, "xhigh": 4.09, "max": 10.02}
+    },
+    "claude-haiku-5-5": {
+      "provider": "anthropic", "chars_per_token": 2.9,
+      "price": {"in": 0.1, "cache_write": 0.125, "cached": 0.01, "out": 0.5},
+      "long": {"over": 100000, "in": 0.5, "cache_write": 0.625, "cached": 0.05, "out": 2.5},
+      "efforts": ["low", "medium", "high", "xhigh", "max"], "default": "medium",
+      "aa_cost_per_task": {"low": 0.04, "medium": 0.09, "high": 0.16, "xhigh": 0.25, "max": 0.41}
+    },
+    "claude-opus-5": {
+      "provider": "anthropic", "chars_per_token": 2.9,
+      "price": {"in": 5, "cache_write": 6.25, "cached": 0.5, "out": 25},
+      "efforts": ["low", "medium", "high", "xhigh", "max"], "default": "high"
+    },
+    "claude-sonnet-5": {
+      "provider": "anthropic", "chars_per_token": 2.9,
+      "price": {"in": 2, "cache_write": 2.5, "cached": 0.2, "out": 10},
+      "efforts": ["low", "medium", "high", "xhigh", "max"], "default": "high"
+    },
+    "claude-haiku-4-5": {
+      "provider": "anthropic", "chars_per_token": 3.4,
+      "price": {"in": 1, "cache_write": 1.25, "cached": 0.1, "out": 5},
+      "efforts": [], "default": null,
+      "note": "no effort parameter; thinking is off unless budget_tokens is set"
+    },
+    "gpt-6-astra": {
+      "provider": "openai", "chars_per_token": 4.0,
+      "price": {"in": 10, "cached": 1, "out": 50},
+      "long": {"over": 272000, "in": 20, "cached": 2, "out": 75},
+      "efforts": ["low", "medium", "high", "xhigh", "max"], "default": "medium",
+      "note": "default effort not documented; medium assumed",
+      "aa_cost_per_task": {"low": 1.42, "medium": 2.73, "high": 3.24, "xhigh": 3.66, "max": 6.24}
+    },
+    "gpt-6.1-sol": {
+      "provider": "openai", "chars_per_token": 4.0,
+      "price": {"in": 2, "cached": 0.1, "out": 10},
+      "long": {"over": 272000, "in": 4, "cached": 0.2, "out": 15},
+      "efforts": ["low", "medium", "high", "xhigh", "max"], "default": "medium",
+      "aa_cost_per_task": {"low": 0.16, "medium": 0.36, "high": 0.59, "xhigh": 0.76, "max": 1.27}
+    },
+    "gpt-6.1-terra": {
+      "provider": "openai", "chars_per_token": 4.0,
+      "price": {"in": 1, "cached": 0.05, "out": 5},
+      "long": {"over": 272000, "in": 2, "cached": 0.1, "out": 7.5},
+      "efforts": ["low", "medium", "high", "xhigh", "max"], "default": "medium",
+      "note": "default effort not documented; medium assumed",
+      "aa_cost_per_task": {"low": 0.07, "medium": 0.17, "high": 0.26, "xhigh": 0.40, "max": 0.96}
+    },
+    "gpt-6-luna": {
+      "provider": "openai", "chars_per_token": 4.0,
+      "price": {"in": 0.1, "cached": 0.01, "out": 0.5},
+      "long": {"over": 272000, "in": 0.2, "cached": 0.02, "out": 0.75},
+      "efforts": ["low", "medium", "high", "xhigh", "max"], "default": "medium",
+      "aa_cost_per_task": {"low": 0.01, "medium": 0.04, "high": 0.07, "xhigh": 0.10, "max": 0.15}
+    },
+    "gemini-4-argon": {
+      "provider": "google", "chars_per_token": 4.0,
+      "price": {"in": 2, "cached": 0.1, "out": 10},
+      "then": {"from": "2026-12-01", "price": {"in": 4, "cached": 0.2, "out": 20}},
+      "efforts": ["low", "medium", "high"], "default": "medium",
+      "aa_cost_per_task": {"high": 9.95}
+    },
+    "gemini-3.8-flash": {
+      "provider": "google", "chars_per_token": 4.0,
+      "price": {"in": 0.75, "cached": 0.075, "out": 3.75},
+      "then": {"from": "2027-01-01", "price": {"in": 1.5, "cached": 0.15, "out": 7.5}},
+      "efforts": ["low", "medium", "high"], "default": "medium",
+      "aa_cost_per_task": {"medium": 6.26, "high": 7.77}
+    },
+    "gemini-3.5-flash-lite": {
+      "provider": "google", "chars_per_token": 4.0,
+      "price": {"in": 0.3, "cached": 0.03, "out": 2.5},
+      "efforts": ["minimal", "low", "medium", "high"], "default": "minimal"
+    },
+    "gemini-3.1-pro-preview": {
+      "provider": "google", "chars_per_token": 4.0,
+      "price": {"in": 2, "cached": 0.2, "out": 12},
+      "long": {"over": 200000, "in": 4, "cached": 0.4, "out": 18},
+      "efforts": ["low", "medium", "high"], "default": "high"
+    }
+  }
+}

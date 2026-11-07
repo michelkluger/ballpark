@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""Estimate what an LLM prompt or agent task costs, per model and effort level.
+
+Public data only (models.json): list prices from each provider, and Artificial
+Analysis' measured cost per task at each effort level for the token-volume curve.
+Stdlib only. Run with --selftest to check the arithmetic.
+"""
+import argparse
+import json
+import statistics
+import sys
+from datetime import date
+from pathlib import Path
+
+DATA = json.loads((Path(__file__).parent / "models.json").read_text(encoding="utf-8"))
+MODELS = DATA["models"]
+TIERS = {k: v["tokens"] for k, v in DATA["tiers"].items() if not k.startswith("_")}
+
+
+def prices(m, today, prompt_tokens):
+    """$/MTok for one request: applies dated price changes, then the long-context tier."""
+    cfg = {**m, **m["then"]} if "then" in m and today >= date.fromisoformat(m["then"]["from"]) else m
+    long = cfg.get("long")
+    p = long if long and prompt_tokens > long["over"] else cfg["price"]
+    return {**p, "cache_write": p.get("cache_write", p["in"])}
+
+
+def _generic_curve():
+    """Median over measured models of cost(level)/cost(high): the fallback effort curve."""
+    by = {}
+    for m in MODELS.values():
+        aa = m.get("aa_cost_per_task", {})
+        if "high" in aa:
+            for lvl, c in aa.items():
+                by.setdefault(lvl, []).append(c / aa["high"])
+    curve = {k: v for k, v in DATA["unmeasured_effort_ratio"].items() if not k.startswith("_")}
+    return {**curve, **{lvl: statistics.median(v) for lvl, v in by.items()}}
+
+
+GENERIC = _generic_curve()
+
+
+def work(m, effort):
+    """Token-volume index = AA cost per task / output price, plus how it was derived."""
+    aa = m.get("aa_cost_per_task", {})
+    if effort in aa:
+        return aa[effort] / m["price"]["out"], "measured"
+    if aa:
+        lvl = "high" if "high" in aa else next(iter(aa))
+        return aa[lvl] / m["price"]["out"] / GENERIC[lvl] * GENERIC[effort], "generic curve"
+    return REF_WORK * GENERIC[effort], "no AA data"
+
+
+REF_WORK = work(MODELS[DATA["reference"]["model"]], DATA["reference"]["effort"])[0]
+
+
+def estimate(m, effort, in_tok, answer, reasoning, turns=1, context=0, growth=0, today=None, caching=False):
+    """USD for one prompt (turns=1) or an agent loop that re-reads a growing, cached context.
+
+    caching=True: the harness writes the prompt to the cache even on a single call (Claude Code does).
+
+    `turns` is the loop length on the reference model at high; like reasoning, it scales with
+    the token-volume index, since lower effort also means fewer, more consolidated tool calls.
+    Returns (usd, output tokens, turns actually priced).
+    """
+    today = today or date.today()
+    f = work(m, effort)[0] / REF_WORK if effort else 1.0
+    out = answer + (reasoning * f if effort else 0)
+    caching = caching or turns > 1  # a loop that shrinks to one call at low effort still caches
+    turns = max(1, round(turns * f)) if turns > 1 else 1
+    usd, base = 0.0, context + in_tok
+    for i in range(turns):
+        ctx = base + i * growth
+        p = prices(m, today, ctx)
+        if turns == 1 and not caching:
+            usd += ctx * p["in"]
+        elif i == 0:
+            usd += ctx * p["cache_write"]
+        else:  # earlier context is a cache hit; this turn's new tokens are written
+            usd += (ctx - growth) * p["cached"] + growth * p["cache_write"]
+        usd += out / turns * p["out"]
+    return usd / 1e6, out, turns
+
+
+def money(x):
+    return f"${x:.2f}" if x >= 1 else f"${x:.4f}" if x >= 0.0001 else f"${x:.6f}"
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    src = ap.add_mutually_exclusive_group()
+    src.add_argument("--file", help="prompt file; tokens estimated per model from characters")
+    src.add_argument("--text", help="prompt text; tokens estimated per model from characters")
+    src.add_argument("--input-tokens", type=int, help="exact prompt token count (used for every model)")
+    ap.add_argument("--context", type=int, default=0, help="extra fixed input: system prompt, tools, attached files")
+    ap.add_argument("--answer", type=int, default=500, help="expected visible output tokens (~1.3 per English word)")
+    ap.add_argument("--tier", choices=list(TIERS), default="moderate", help="task difficulty -> reasoning tokens")
+    ap.add_argument("--reasoning", type=int, help="override: reasoning tokens on the reference model at high")
+    ap.add_argument("--model", nargs="*", help="model ids (default: all); prefix match, e.g. 'claude' or 'gpt-6'")
+    ap.add_argument("--effort", nargs="*", help="effort levels, or 'all' (default: each model's default)")
+    ap.add_argument("--turns", type=int, default=1, help="model calls in an agent loop (default 1)")
+    ap.add_argument("--growth", type=int, default=2000, help="tokens added to context per turn (tool results + output)")
+    ap.add_argument("--caching", action="store_true",
+                    help="harness writes the prompt to the cache even on one call (Claude Code, agent SDKs); "
+                         "multi-turn runs always assume caching")
+    ap.add_argument("--date", type=date.fromisoformat, default=date.today(), help="price date, YYYY-MM-DD")
+    ap.add_argument("--selftest", action="store_true")
+    a = ap.parse_args()
+    if a.selftest:
+        return selftest()
+
+    text = Path(a.file).read_text(encoding="utf-8", errors="replace") if a.file else a.text
+    if text is None and a.input_tokens is None:
+        ap.error("give --file, --text or --input-tokens")
+    lo, mid, hi = [a.reasoning] * 3 if a.reasoning is not None else TIERS[a.tier]
+
+    ids = [k for k in MODELS if not a.model or any(k.startswith(p) for p in a.model)]
+    if not ids:
+        ap.error(f"no model matches {a.model}; known: {', '.join(MODELS)}")
+    rows, skipped = [], []
+    for k in ids:
+        m = MODELS[k]
+        levels = m["efforts"] if a.effort == ["all"] else a.effort or [m["default"]]
+        for e in levels:
+            if e is not None and e not in m["efforts"]:
+                skipped.append(f"{k}:{e}")
+                continue
+            tok = a.input_tokens if a.input_tokens is not None else round(len(text) / m["chars_per_token"])
+            run = lambda r: estimate(m, e, tok, a.answer, r, a.turns, a.context, a.growth, a.date, a.caching)
+            (c_lo, *_), (c_mid, out, n), (c_hi, *_) = run(lo), run(mid), run(hi)
+            how = work(m, e)[1] if e else "no thinking"
+            vol = f"x{work(m, e)[0] / REF_WORK:.2f} ref" if e else "-"
+            note = "; ".join(filter(None, [how, m.get("note")]))
+            rows.append((c_mid, k, e or "-", tok + a.context, round(out), n, c_lo, c_hi, vol, note))
+
+    rows.sort()
+    head = ("model", "effort", "in tok", "out tok", "turns", "low", "expected", "high", "volume", "basis")
+    table = [head] + [(k, e, f"{t:,}", f"{o:,}", str(n), money(l), money(c), money(h), v, b)
+                      for c, k, e, t, o, n, l, h, v, b in rows]
+    widths = [max(len(r[i]) for r in table) for i in range(len(head))]
+    for r in table:
+        print("  ".join(s.ljust(w) for s, w in zip(r, widths)).rstrip())
+
+    print(f"\ntier={a.tier if a.reasoning is None else 'custom'} reasoning(ref @ high)={lo:,}/{mid:,}/{hi:,}"
+          f"  answer={a.answer:,}  turns={a.turns}" + (f"  growth/turn={a.growth:,}" if a.turns > 1 else ""))
+    if text is not None:
+        print("input tokens are a character heuristic; pass --input-tokens for an exact count")
+    if skipped:
+        print(f"skipped (level not supported): {', '.join(skipped)}")
+    for k in ids:
+        t = MODELS[k].get("then")
+        if t and a.date < date.fromisoformat(t["from"]):
+            print(f"note: {k} price changes on {t['from']} to ${t['price']['in']}/${t['price']['out']} per MTok")
+    age = (a.date - date.fromisoformat(DATA["as_of"])).days
+    if age > 45:
+        print(f"WARNING: prices are {age} days old (as_of {DATA['as_of']}); refresh models.json from its sources")
+
+
+def selftest():
+    d = date(2026, 11, 7)
+    opus, haiku = MODELS["claude-opus-5-5"], MODELS["claude-haiku-5-5"]
+    # 1M in + 1M out, no thinking: $4 + $20
+    assert abs(estimate(opus, None, 1_000_000, 1_000_000, 0, today=d)[0] - 24) < 1e-9
+    # reference model at high scales reasoning by exactly 1
+    assert estimate(opus, "high", 0, 0, 10_000, today=d)[1] == 10_000
+    # more effort never costs less on a measured model
+    for m in (opus, MODELS["gpt-6-astra"], MODELS["claude-sonnet-5-5"]):
+        costs = [estimate(m, e, 1000, 500, 4000, today=d)[0] for e in m["efforts"]]
+        assert costs == sorted(costs), costs
+    # long-context tier and dated price change
+    assert prices(haiku, d, 150_000)["in"] == 0.5 and prices(haiku, d, 99_000)["in"] == 0.1
+    argon = MODELS["gemini-4-argon"]
+    assert prices(argon, d, 10)["in"] == 2 and prices(argon, date(2026, 12, 1), 10)["in"] == 4
+    # 2-turn loop: turn 1 writes 50k to cache ($5/M), turn 2 reads it ($0.20/M)
+    two = estimate(opus, None, 50_000, 0, 0, turns=2, today=d)[0]
+    assert abs(two - (50_000 * 5 + 50_000 * 0.2) / 1e6) < 1e-12
+    # Claude Code-style single call: the 37k prefix is a cache write ($5/M on Opus 5.5), not plain input
+    one = estimate(opus, None, 37_000, 0, 0, today=d, caching=True)[0]
+    assert abs(one - 37_000 * 5 / 1e6) < 1e-12
+    # a 2-turn loop that low effort shrinks to 1 call is still priced as a cache write
+    shrunk = estimate(opus, "low", 37_000, 0, 0, turns=2, today=d)
+    assert shrunk[2] == 1 and abs(shrunk[0] - 37_000 * 5 / 1e6) < 1e-12
+    # lower effort runs a shorter loop
+    assert estimate(opus, "low", 0, 0, 0, turns=20, today=d)[2] < estimate(opus, "high", 0, 0, 0, turns=20, today=d)[2]
+    # unmeasured model falls back to the reference volume
+    assert work(MODELS["claude-opus-5"], "high") == (REF_WORK, "no AA data")
+    print("selftest ok")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
