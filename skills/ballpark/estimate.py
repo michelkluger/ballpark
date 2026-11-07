@@ -74,7 +74,8 @@ def estimate(m, effort, in_tok, answer, reasoning, turns=1, context=0, growth=0,
     today = today or date.today()
     f = work(m, effort)[0] / REF_WORK if effort else 1.0
     caching = caching or warm or turns > 1  # a loop that shrinks to one call at low effort still caches
-    calls = max(1, round(turns if fixed_turns else turns * f)) if turns > 1 else 1
+    # a loop that reads tool output needs a second call to read it, however low the effort
+    calls = max(2 if read else 1, round(turns if fixed_turns else turns * f)) if turns > 1 else 1
     if read is not None:  # what an agent reads depends on the code, not on how many calls it takes
         growth = read / max(1, calls - 1)
     out = answer + (reasoning * f if effort else 0) + (per_call * calls if calls > 1 else 0)
@@ -144,13 +145,14 @@ def main():
     r = a.reasoning
     lo, mid, hi = TIERS[a.tier] if r is None else r * 3 if len(r) == 1 else r
 
-    ids = [k for k in MODELS if not a.model or any(k.startswith(p) for p in a.model)]
+    # an exact id means that model only: 'claude-opus-5' must not also pick claude-opus-5-5
+    ids = [k for k in MODELS if not a.model or any(k == p if p in MODELS else k.startswith(p) for p in a.model)]
     if not ids:
         ap.error(f"no model matches {a.model}; known: {', '.join(MODELS)}")
     rows, skipped = [], []
     for k in ids:
         m = MODELS[k]
-        levels = m["efforts"] if a.effort == ["all"] else a.effort or [m["default"]]
+        levels = (m["efforts"] or [None]) if a.effort == ["all"] else a.effort or [m["default"]]
         for e in levels:
             if e is not None and e not in m["efforts"]:
                 skipped.append(f"{k}:{e}")
@@ -195,46 +197,54 @@ def main():
 
 def selftest():
     d = date(2026, 11, 7)
-    opus, haiku = MODELS["claude-opus-5-5"], MODELS["claude-haiku-5-5"]
-    # 1M in + 1M out, no thinking: $4 + $20
-    assert abs(estimate(opus, None, 1_000_000, 1_000_000, 0, today=d)[0] - 24) < 1e-9
-    # reference model at high scales reasoning by exactly 1
-    assert estimate(opus, "high", 0, 0, 10_000, today=d)[1] == 10_000
-    # more effort never costs less on a measured model
-    for m in (opus, MODELS["gpt-6-astra"], MODELS["claude-sonnet-5-5"]):
+    # a made-up model with fixed prices, so refreshing models.json never breaks the arithmetic checks;
+    # it has no AA data, so its effort scaling is the generic curve
+    fx = {"price": {"in": 4, "cache_write": 5, "cached": 0.2, "out": 20},
+          "long": {"over": 200_000, "in": 8, "cached": 0.4, "out": 30},
+          "then": {"from": "2027-01-01", "price": {"in": 6, "cached": 0.3, "out": 30}},
+          "efforts": ["low", "medium", "high"]}
+    # 100k in + 100k out, no thinking: $0.40 + $2
+    assert abs(estimate(fx, None, 100_000, 100_000, 0, today=d)[0] - 2.4) < 1e-9
+    # the reference model at its reference effort scales reasoning by exactly 1
+    ref = MODELS[DATA["reference"]["model"]]
+    assert estimate(ref, DATA["reference"]["effort"], 0, 0, 10_000, today=d)[1] == 10_000
+    # data check: more effort never costs less, on any model in models.json
+    for k, m in MODELS.items():
         costs = [estimate(m, e, 1000, 500, 4000, today=d)[0] for e in m["efforts"]]
-        assert costs == sorted(costs), costs
+        assert costs == sorted(costs), (k, costs)
     # long-context tier and dated price change
-    assert prices(haiku, d, 150_000)["in"] == 0.5 and prices(haiku, d, 99_000)["in"] == 0.1
-    argon = MODELS["gemini-4-argon"]
-    assert prices(argon, d, 10)["in"] == 2 and prices(argon, date(2026, 12, 1), 10)["in"] == 4
+    assert prices(fx, d, 250_000)["in"] == 8 and prices(fx, d, 199_000)["in"] == 4
+    assert prices(fx, date(2027, 1, 1), 10)["in"] == 6
     # 2-turn loop: turn 1 writes 50k to cache ($5/M), turn 2 reads it ($0.20/M)
-    two = estimate(opus, None, 50_000, 0, 0, turns=2, today=d)[0]
+    two = estimate(fx, None, 50_000, 0, 0, turns=2, today=d)[0]
     assert abs(two - (50_000 * 5 + 50_000 * 0.2) / 1e6) < 1e-12
-    # Claude Code-style single call: the 37k prefix is a cache write ($5/M on Opus 5.5), not plain input
-    one = estimate(opus, None, 37_000, 0, 0, today=d, caching=True)[0]
+    # Claude Code-style single call: the 37k prefix is a cache write ($5/M), not plain input
+    one = estimate(fx, None, 37_000, 0, 0, today=d, caching=True)[0]
     assert abs(one - 37_000 * 5 / 1e6) < 1e-12
     # a 2-turn loop that low effort shrinks to 1 call is still priced as a cache write
-    shrunk = estimate(opus, "low", 37_000, 0, 0, turns=2, today=d)
+    shrunk = estimate(fx, "low", 37_000, 0, 0, turns=2, today=d)
     assert shrunk[2] == 1 and abs(shrunk[0] - 37_000 * 5 / 1e6) < 1e-12
+    # ...unless it reads tool output: reading needs a second call, so the 1,000 read is still billed
+    reads = estimate(fx, "low", 0, 0, 0, turns=2, read=1_000, today=d)
+    assert reads[2] == 2 and abs(reads[0] - 1_000 * 5 / 1e6) < 1e-12, reads
     # warm prefix: the 37k system prompt is a cache read ($0.20/M), only the new 1k prompt is written ($5/M)
-    warm = estimate(opus, None, 1_000, 0, 0, context=37_000, today=d, warm=True)[0]
+    warm = estimate(fx, None, 1_000, 0, 0, context=37_000, today=d, warm=True)[0]
     assert abs(warm - (37_000 * 0.2 + 1_000 * 5) / 1e6) < 1e-12
-    # well-specified task: the call count does not grow with effort
-    assert estimate(opus, "xhigh", 0, 0, 0, turns=10, fixed_turns=True, today=d)[2] == 10
+    # well-specified task: the call count does not shrink or grow with effort
+    assert estimate(fx, "low", 0, 0, 0, turns=10, fixed_turns=True, today=d)[2] == 10
     # total read spread over the calls: 2,000 over 3 calls -> 1,000 arrives before calls 2 and 3
-    spread = estimate(opus, None, 0, 0, 0, turns=3, read=2_000, today=d)[0]
+    spread = estimate(fx, None, 0, 0, 0, turns=3, read=2_000, today=d)[0]
     assert abs(spread - (1_000 * 5 + 1_000 * 0.2 + 1_000 * 5) / 1e6) < 1e-12, spread
     # agent loops: per-call tool text is output; single calls make no tool calls
-    assert estimate(opus, None, 0, 0, 0, turns=3, per_call=400, today=d)[1] == 1200
-    assert estimate(opus, None, 0, 0, 0, per_call=400, today=d)[1] == 0
+    assert estimate(fx, None, 0, 0, 0, turns=3, per_call=400, today=d)[1] == 1200
+    assert estimate(fx, None, 0, 0, 0, per_call=400, today=d)[1] == 0
     # each call's output joins the context: 300 out over 3 calls -> writes 100+100, reads 100, out 300
-    grown = estimate(opus, None, 0, 300, 0, turns=3, today=d)[0]
+    grown = estimate(fx, None, 0, 300, 0, turns=3, today=d)[0]
     assert abs(grown - (200 * 5 + 100 * 0.2 + 300 * 20) / 1e6) < 1e-12, grown
     # lower effort runs a shorter loop
-    assert estimate(opus, "low", 0, 0, 0, turns=20, today=d)[2] < estimate(opus, "high", 0, 0, 0, turns=20, today=d)[2]
+    assert estimate(fx, "low", 0, 0, 0, turns=20, today=d)[2] < estimate(fx, "high", 0, 0, 0, turns=20, today=d)[2]
     # unmeasured model falls back to the reference volume
-    assert work(MODELS["claude-opus-5"], "high") == (REF_WORK, "no AA data")
+    assert work(fx, "high") == (REF_WORK, "no AA data")
     print("selftest ok")
 
 

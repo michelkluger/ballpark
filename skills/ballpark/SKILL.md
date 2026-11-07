@@ -24,8 +24,12 @@ English prose (code, JSON and non-English text use more tokens per character):
 - Claude: the free `count_tokens` endpoint (`client.messages.count_tokens(...)` or
   `ant messages count-tokens`), when credentials exist. Never use tiktoken for Claude: it
   undercounts by 15-20% or more.
-- OpenAI: its own tokenizer (tiktoken). Gemini: the `countTokens` API.
-- Otherwise pass the prompt with `--file` / `--text` and the script estimates per model.
+- OpenAI: its own tokenizer (tiktoken, runs locally). Gemini: the `countTokens` API.
+- A counting API receives the whole prompt, so only call a provider's API when the prompt
+  is going to that provider anyway.
+- Otherwise write the prompt to a temp file and pass `--file`; the script estimates per
+  model. Never put prompt text on the command line (`--text "..."`): the shell runs any
+  `$(...)` or backticks inside it, and expands `$VARS`, which also changes the count.
 Include everything sent: system prompt, attached files, tool definitions (`--context`).
 
 **3. Estimate the visible answer** (`--answer`, tokens): about 1.3 tokens per English word
@@ -86,7 +90,7 @@ low / medium / high / xhigh) within about 13%.
 ```bash
 python3 <this-skill-dir>/estimate.py --file prompt.txt --answer 800 --tier moderate
 python3 <this-skill-dir>/estimate.py --input-tokens 12000 --tier hard --model claude-opus-5-5 gpt-6.1 --effort all
-python3 <this-skill-dir>/estimate.py --text "..." --turns 30 --context 20000 --growth 1500 --tier hard --model claude
+python3 <this-skill-dir>/estimate.py --file task.txt --turns 30 --context 20000 --growth 1500 --tier hard --model claude
 ```
 `--model` takes prefixes (`claude`, `gpt-6`, `gemini-3`). `--effort all` sweeps every level.
 A level a model doesn't support is skipped and listed. `--date` prices a future day, which

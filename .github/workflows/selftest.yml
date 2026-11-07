@@ -1,0 +1,10 @@
+name: selftest
+on: [push, pull_request]
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # stdlib only, so the runner's own python3 is enough
+      - run: python3 skills/ballpark/estimate.py --selftest
+      - run: python3 skills/ballpark/measure.py --selftest
